@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en-US">
+	<head>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<meta name="Content-Type" content="text/html" charset="ISO-8859-1">
+		<title> JoyStick Demo </title>
+		<!-- Style sheet for responsive design -->
+		<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css" integrity="sha384-Gn5384xqQ1aoWXA+058RXPxPg6fy4IWvTNh0E263XmFcJlSAwiGgFAW/dAiS6JXm" crossorigin="anonymous">
+		<link rel="stylesheet" href="https://www.w3schools.com/w3css/4/w3.css">
+		<script src="https://code.jquery.com/jquery-3.2.1.slim.min.js" integrity="sha384-KJ3o2DKtIkvYIK3UENzmM7KCkRr/rE9/Qpg6aAZGJwFDMVNA/GpGFF93hXpG5KkN" crossorigin="anonymous"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js" integrity="sha384-ApNbgh9B+Y1QKtv3Rn7W3mgPxhU9K/ScQsAP7hUibX39j7fakFPskvXusvfa0b4Q" crossorigin="anonymous"></script>
+        <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js" integrity="sha384-JZR6Spejh4U02d8jOt6vLEHfe/JQGiRRSQQxSfFWpi1MquVdAyjUar5+76PVCmYl" crossorigin="anonymous"></script>
+		<style>
+			* {
+				box-sizing: border-box;
+			}
+			/* style classes for pictures */
+			.fill {object-fit: fill;}
+			.contain {object-fit: contain;}
+			.cover {object-fit: cover;}
+			.scale-down {object-fit: scale-down;}
+			.none {object-fit: none;}
+			
+			body {
+				margin: 0px;
+				padding: 0px;
+			}
+			#joystick {
+				border: 2px solid #9C9898;
+			}
+		</style>
+		<link rel="stylesheet" href="static/dev/css/jquery-ui.css">
+		<script src="static/dev/js/joy.js"></script>
+		<script type="text/javascript" src="//cdnjs.cloudflare.com/ajax/libs/socket.io/1.3.5/socket.io.min.js"></script>
+	</head>
+	<body>
+		<div class="w3-container">
+			<div class="w3-container w3-center w3-teal">
+				<h2><strong>JoyStick Demo</strong></h2>
+			</div>
+			<div class="w3-row">
+				<div class="w3-third">
+					<label for="CtrlKey"> Control Key:</label>
+					<input type="text" name="CtrlKey" id="CtrlKey" onfocus="this.value=''" size=25 value="Enter Key then press Start" data-clear-btn="true">
+					<button onClick="chgButton()" class="w3-btn w3-border w3-border-black w3-round w3-blue" id="ctlButton"> Begin</button>
+				</div>
+			</div>
+			<p id="entry"></p>
+		</div>
+		<div class="w3-container w3-row">
+			<div class="w3-third">
+				Cursor X:  <input id="cursorX" type="text" /></br>
+				Cursor Y:  <input id="cursorY" type="text" /></br>
+				Direction: <input id="direction" type="text" /></br>
+				Stick X:   <input id="X" type="text" /></br>
+				Stick Y:   <input id="Y" type="text" />
+			</div>
+			<div class="w3-third" id="joyDiv" style="width:200px;height:200px;margin-bottom:20px;"></div>
+			<!-- we-rest keeps slider on right of joystick on small screens -->
+
+		</div>
+			
+		  <Script>
+		  
+			<!-- Create JoyStick object into the DIV 'joyDiv' -->
+
+			var joy = new JoyStick('joyDiv');
+			var inputPosX = document.getElementById("cursorX");
+			var inputPosY = document.getElementById("cursorY");
+			var direction = document.getElementById("direction");
+			var x = document.getElementById("X");
+			var y = document.getElementById("Y");
+
+			setInterval(function(){ inputPosX.value=joy.GetPosX(); }, 50);
+			setInterval(function(){ inputPosY.value=joy.GetPosY(); }, 50);
+			setInterval(function(){ direction.value=joy.GetDir(); }, 50);
+			setInterval(function(){ x.value=joy.GetX(); }, 50);
+			setInterval(function(){ y.value=joy.GetY(); }, 50);
+			
+			window.addEventListener("beforeunload", function (event) {
+				  event.preventDefault();
+				});
+			$(document).ready (function() {
+				$("#ctlButton").click(function () {
+					var entry = document.getElementById('entry');
+					var CtrlKey = document.getElementById('CtrlKey');
+					entry.innerHTML = 'You entered: ' + CtrlKey.value;
+				});
+			});
+			var sCounter = 0; /*-- Temp for testing button change routine */
+			function chgButton()
+			{
+				sCounter = sCounter + 1;
+				ButtonCtl(sCounter);
+				if (sCounter > 3) {
+					sCounter = 0;
+				}
+			}
+			function ButtonCtl(condition) {
+				var statusButton = document.getElementById("ctlButton");
+				switch(condition)
+				{
+					case 1:
+						/* Running - Button color=green, text=Running */
+						statusButton.style.backgroundColor = "green";
+						statusButton.innerHTML = "Running";
+						break;
+					case 2:
+						/* Time running out - Button color=yellow, text=Warning */
+						statusButton.style.color = "w3-yellow";
+						statusButton.innerHTML = "Warning";
+						break;
+					case 3:
+						/* Stop - Button color=red, text=stopped */
+						statusButton.style.color = "w3-red";
+						statusButton.innerHTML = "Stopped";
+						break;
+					default:
+						/* Idle - Button color=blue, text=begin */
+						statusButton.style.color = "w3-blue";
+						statusButton.innerHTML = "Begin";
+						break;
+				}
+			}
+		</script>
+   </body>
+</html>
