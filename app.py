@@ -1,9 +1,31 @@
 #!/usr/bin/env python
 from threading import Lock
 import yaml
-from flask import Flask, render_template, session, request, url_for, escape, redirect 
-from flask_socketio import SocketIO, emit, join_room, leave_room, \
-    close_room, rooms, disconnect
+from flask import Flask
+from flask import render_template
+from flask import session
+from flask import request
+from flask import url_for
+from flask import escape
+from flask import redirect
+from flask_socketio import SocketIO
+from flask_socketio import emit
+from flask_socketio import join_room
+from flask_socketio import leave_room
+from flask_socketio import close_room
+from flask_socketio import rooms
+from flask_socketio import disconnect
+from flask_login import LoginManager
+from flask_login import login_required
+from flask_login import UserMixin
+from flask_login import login_user
+from flask_login import logout_user
+from flask_login import current_user
+import paho.mqtt.client as mqtt
+import redis
+import time 
+import random
+from datetime import timedelta
 
 # Set this variable to "threading", "eventlet" or "gevent" to test the
 # different async modes, or leave it set to None for the application to choose
@@ -11,13 +33,78 @@ from flask_socketio import SocketIO, emit, join_room, leave_room, \
 async_mode = 'threading'
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'secret!'
+app.config['SECRET_KEY'] = 'secret_key'
+app.config['TESTING'] = False
+
 socketio = SocketIO(app, async_mode=async_mode)
 thread = None
 thread_lock = Lock()
-logged_in = False 
 
-import paho.mqtt.client as mqtt
+login_manager = LoginManager()
+login_manager.init_app(app)
+
+db = redis.Redis(host='localhost')
+
+# seconds
+key_validity = 60 
+
+# User session timeout - minute
+session_timeout = 1
+
+
+class User(UserMixin):
+    def __init__(self , username , password , id , active=True):
+        self.id = id
+        self.username = username
+        self.password = password
+        self.active = active
+
+    def get_id(self):
+        return self.id
+
+    def is_active(self):
+        return self.active
+
+    def get_auth_token(self):
+        return make_secure_token(self.username , key='secret_key')
+
+    def set_username(self, uname):
+        self.username = uname 
+
+    def set_password(self, passwd):
+        self.password = passwd 
+
+class UsersRepository:
+
+    def __init__(self):
+        self.users = dict()
+        self.users_id_dict = dict()
+        self.identifier = 0
+
+        self.users['admin'] = User('admin' , 'admin' , 1 , active=True)
+        self.users_id_dict[1] = User('admin' , 'admin' , 1 , active=True)
+    
+    def save_user(self , user):
+        self.users_id_dict.setdefault(user.id , user)
+        self.users.setdefault(user.username , user)
+    
+    def get_user(self , username):
+        return self.users.get(username)
+    
+    def get_user_by_id(self , userid):
+        return self.users_id_dict.get(userid)
+    
+    def next_index(self):
+        self.identifier +=1
+        return self.identifier
+
+    def create_user(self, uname, passwd):
+        uid = random.randint(1111,9999)
+        self.users[uname] = User(uname , passwd , uid , active=True)
+        self.users_id_dict[uid] = User(uname , passwd , uid , active=True)
+
+
+users_repository = UsersRepository()
 
 def on_connect(client, userdata, flags, rc):
     print 'Connected with result code ' + str(rc)
@@ -29,49 +116,119 @@ client.connect("test.mosquitto.org", 1883, 60)
 
 def background_thread():
     """Example of how to send server generated events to clients."""
-    count = 0
+    r = redis.Redis(host='localhost')
+    r.set('activated', 'False')
+    r.set('access_code', random.randint(1111,9999))
+    socketio.emit('newnumber', {'number': r.get('access_code')}, namespace='/test')
     while True:
-        socketio.sleep(10)
-        count += 1
-        socketio.emit('my_response2',
-                      {'data': 'Server generated event', 'count': count},
-                      namespace='/test')
+        print 'state of client activation ' + str(r.get('activated'))
+        if r.get('activated') == 'False':
+            print 'NotActivated - sleep 2'
+            time.sleep(2)
+        elif r.get('activated') == 'True':
+            socketio.emit('newnumber', {'number': 'Rover Connected', 'countdown' : str(r.pttl('activated')/1000), 'user' : db.get('ctrl_user')}, namespace='/test')
+            print 'Activated - Connected - sleep 2'
+            time.sleep(1)
+        elif r.get('activated') == None:
+            r.set('access_code', random.randint(1111,9999))
+            print 'Expired - Emit - sleep 2'
+            socketio.emit('newnumber', {'number': r.get('access_code')}, namespace='/test')
+            r.set('activated', 'False')
+            time.sleep(2)
+        else:
+            print 'No Match - Error'
+            time.sleep(2)
 
-@app.route('/login', methods = ['GET', 'POST'])
-def index():
-   if request.method == 'POST':
-      session['username'] = request.form['username']
-      return redirect(url_for('index'))
-   return '''
-    
-   <form action = "" method = "post">
-      <p><input type = text name = username/></p>
-      <p<<input type = submit value = Login/></p>
-   </form>
-    
-   '''
 
-#@app.route('/')
-#def index():
-#    return render_template('index.html', async_mode=socketio.async_mode)
+@app.route('/joystick')
+@login_required
+def joystick():
+    return render_template('joystick.html', async_mode=socketio.async_mode)
 
-@app.route('/dev')
-def dev():
-    return render_template('dev.html', async_mode=socketio.async_mode)
+@app.route('/admin')
+@login_required
+def admin():
+    return render_template('admin.html', async_mode=socketio.async_mode)
+
+
+@app.route('/404')
+def not_found():
+    return render_template('404.html', async_mode=socketio.async_mode)
+
+@app.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    db.set('activated', 'False', ex=1)
+    return redirect(url_for('login'))
+
 
 @app.route('/rover')
+@login_required
 def rover():
     return render_template('robo.html', async_mode=socketio.async_mode)
 
-@app.route('/admin', methods=['GET', 'POST'])
-def admin():
+@app.route('/', methods=['GET', 'POST'])
+def login():
     error = None
+    if current_user.is_authenticated:
+        return redirect(url_for('joystick'))
     if request.method == 'POST':
-        if request.form['username'] != 'admin' or request.form['password'] != 'admin':
-            error = 'Invalid Credentials. Please try again.'
+        username = request.form['username']
+        password = request.form['password']
+        print 'form username ' + username
+        print 'form password ' + password
+        if username != 'admin':
+            users_repository.create_user(username, db.get('access_code'))
+            print db.get('access_code')
+        registeredUser = users_repository.get_user(username)
+        if registeredUser != None and registeredUser.username == 'admin':
+            if registeredUser != None and registeredUser.password == password:
+                print 'Users '+ str(users_repository.users) 
+                print 'Register user %s , password %s' % (registeredUser.username, registeredUser.password) 
+                print('Admin Logged in..')
+                login_user(registeredUser)
+                return redirect(url_for('admin'))
+            else:
+                error = 'Invalid admin password'
         else:
-            return redirect(url_for('dev'))
-    return render_template('admin.html', error=error)
+            # session.permanent = True
+            # app.permanent_session_lifetime = timedelta(minutes=session_timeout)
+            print 'form username ' + username
+            print 'form password ' + password
+            if registeredUser != None and registeredUser.password == password :
+                print 'Users '+ str(users_repository.users) 
+                print 'Register user %s , password %s' % (registeredUser.username, registeredUser.password)
+                print('Controller Logged in..')
+                login_user(registeredUser)
+                db.set('ctrl_user', username)
+                db.set('access_code', 'Rover Activated')
+                db.set('activated', 'True', ex=key_validity)
+                socketio.emit('newnumber', {'number': db.get('access_code')}, namespace='/test')
+                return redirect(url_for('joystick'))
+            else:
+                error = 'Invalid Access Code!'
+    return render_template('login.html', error=error)
+
+# callback to reload the user object        
+@login_manager.user_loader
+def load_user(userid):
+    print 'Username ' + str(userid)
+    return users_repository.get_user_by_id(userid)
+
+# @app.before_request
+# def make_session_permanent():
+#     session.permanent = True
+#     app.permanent_session_lifetime = timedelta(minutes=1)
+
+# handle login failed
+@app.errorhandler(401)
+def page_not_found(e):
+    return redirect(url_for('login'))
+
+@app.errorhandler(404)
+def page_not_found(e):
+    return redirect(url_for('not_found'))
 
 @socketio.on('my_event', namespace='/test')
 def test_message(message):
@@ -80,7 +237,6 @@ def test_message(message):
     client.publish('/test/dinesh/kumar', payload=str(message), qos=0, retain=False)
     socketio.emit('my_response', {'data': message['data']} , namespace='/test')
     #emit('my_response', {'data': message['data'], 'count': session['receive_count']})
-
 
 @socketio.on('my_broadcast_event', namespace='/test')
 def test_broadcast_message(message):
@@ -140,11 +296,19 @@ def ping_pong():
 
 @socketio.on('connect', namespace='/test')
 def test_connect():
+    print 'Joystic connected - app'
+    emit('my_response', {'data': 'Connected', 'count': 0})
+    print 'Admin connected - app'
     global thread
     with thread_lock:
         if thread is None:
             thread = socketio.start_background_task(target=background_thread)
-    emit('my_response', {'data': 'Connected', 'count': 0})
+    socketio.emit('newnumber', {'number': db.get('access_code')}, namespace='/test')
+
+@socketio.on('newnumber', namespace='/test')
+def admin_connect():
+    print 'Admin connected - app2'
+    socketio.emit('newnumber', {'number': db.get('access_code')}, namespace='/test')
 
 
 @socketio.on('disconnect', namespace='/test')
