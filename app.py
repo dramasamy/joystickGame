@@ -26,6 +26,7 @@ import redis
 import time 
 import random
 from datetime import timedelta
+from influxdb import InfluxDBClient
 
 # Set this variable to "threading", "eventlet" or "gevent" to test the
 # different async modes, or leave it set to None for the application to choose
@@ -117,15 +118,58 @@ client.connect("test.mosquitto.org", 1883, 60)
 def background_thread():
     """Example of how to send server generated events to clients."""
     r = redis.Redis(host='localhost')
+    if r.get('signup') == None:
+        r.set('signup', 0)
     r.set('activated', 'False')
     r.set('access_code', random.randint(1111,9999))
     socketio.emit('newnumber', {'number': r.get('access_code')}, namespace='/test')
+    client = InfluxDBClient('localhost', 8086, 'root', 'root', 'rover')
     while True:
         print 'state of client activation ' + str(r.get('activated'))
         if r.get('activated') == 'False':
+            json_body = [
+                {
+                    "measurement": "access_code",
+                    "tags": {
+                        "host": "rover1",
+                        "region": "npv"
+                    },
+                    "time": 1234567890000000,
+                    "fields": {
+                        "countdown": "IDLE",
+                        "rover_state": "IDLE",
+                        "user_name": "No Active User",
+                        "access_code": r.get('access_code'),
+                        "battery_level": 80,
+                        "client": "http://127.0.0.1:5000"
+                    }
+                }
+            ]
+            client.write_points(json_body)
             print 'NotActivated - sleep 2'
             time.sleep(2)
         elif r.get('activated') == 'True':
+
+            json_body = [
+                {
+                    "measurement": "access_code",
+                    "tags": {
+                        "host": "rover1",
+                        "region": "npv"
+                    },
+                    "time": 1234567890000000,
+                    "fields": {
+                        "countdown": str(r.pttl('activated')/1000),
+                        "rover_state": "ACTIVE",
+                        "user_name": db.get('ctrl_user'),
+                        "access_code": "XXXX",
+                        "battery_level": 80,
+                        "client": "http://127.0.0.1:5000",
+                        "signup": int(r.get('signup'))
+                    }
+                }
+            ]
+            client.write_points(json_body)
             socketio.emit('newnumber', {'number': 'Rover Connected', 'countdown' : str(r.pttl('activated')/1000), 'user' : db.get('ctrl_user')}, namespace='/test')
             print 'Activated - Connected - sleep 2'
             time.sleep(1)
@@ -133,6 +177,25 @@ def background_thread():
             r.set('access_code', random.randint(1111,9999))
             print 'Expired - Emit - sleep 2'
             socketio.emit('newnumber', {'number': r.get('access_code')}, namespace='/test')
+            json_body = [
+                {
+                    "measurement": "access_code",
+                    "tags": {
+                        "host": "rover1",
+                        "region": "npv"
+                    },
+                    "time": 1234567890000000,
+                    "fields": {
+                        "countdown": "IDLE",
+                        "rover_state": "IDLE",
+                        "user_name": "No Active User",
+                        "access_code": r.get('access_code'),
+                        "battery_level": 80,
+                        "client": "http://127.0.0.1:5000"
+                    }
+                }
+            ]
+            client.write_points(json_body)
             r.set('activated', 'False')
             time.sleep(2)
         else:
@@ -150,6 +213,9 @@ def joystick():
 def admin():
     return render_template('admin.html', async_mode=socketio.async_mode)
 
+@app.route('/joy')
+def joy():
+    return render_template('joy.html', async_mode=socketio.async_mode)
 
 @app.route('/404')
 def not_found():
@@ -204,6 +270,8 @@ def login():
                 db.set('ctrl_user', username)
                 db.set('access_code', 'Rover Activated')
                 db.set('activated', 'True', ex=key_validity)
+                new_user_count = int(db.get('signup')) + 1
+                db.set('signup', new_user_count)
                 socketio.emit('newnumber', {'number': db.get('access_code')}, namespace='/test')
                 return redirect(url_for('joystick'))
             else:
