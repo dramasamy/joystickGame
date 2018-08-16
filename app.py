@@ -37,6 +37,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret_key'
 app.config['TESTING'] = False
 
+
 socketio = SocketIO(app, async_mode=async_mode)
 thread = None
 thread_lock = Lock()
@@ -44,7 +45,39 @@ thread_lock = Lock()
 login_manager = LoginManager()
 login_manager.init_app(app)
 
+host_name = '127.0.0.1'
+host_name = '0.0.0.0'
+host_port = 5000
+
 db = redis.Redis(host='localhost')
+db.set('access_code', random.randint(1111,9999))
+
+db.set('host_name', host_name)
+db.set('host_port', host_port)
+db.set('activated', 'False')
+
+influxDb1 = InfluxDBClient('127.0.0.1', 8086, 'root', 'root', 'rover')
+client_url = 'http://' + db.get('host_name') + ':' + db.get('host_port')
+json_body = [
+    {
+        "measurement": "access_code",
+        "tags": {
+            "host": "rover1",
+            "region": "npv"
+        },
+        "time": 1234567890000000,
+        "fields": {
+            "countdown": "IDLE",
+            "rover_state": "IDLE",
+            "user_name": "No Active User",
+            "access_code": db.get('access_code'),
+            "battery_level": 80,
+            "client": client_url
+        }
+    }
+]
+print json_body
+influxDb1.write_points(json_body)
 
 # seconds
 key_validity = 60 
@@ -112,7 +145,7 @@ def on_connect(client, userdata, flags, rc):
 
 client = mqtt.Client(client_id="tedxClient1", clean_session=False, userdata=None,protocol=4, transport="tcp")
 client.on_connect = on_connect
-client.connect("test.mosquitto.org", 1883, 60)
+client.connect("localhost", 1883, 60)
 
 
 def background_thread():
@@ -120,13 +153,13 @@ def background_thread():
     r = redis.Redis(host='localhost')
     if r.get('signup') == None:
         r.set('signup', 0)
-    r.set('activated', 'False')
-    r.set('access_code', random.randint(1111,9999))
+    client_url = 'http://' + r.get('host_name') + ':' + r.get('host_port')
     socketio.emit('newnumber', {'number': r.get('access_code')}, namespace='/test')
-    client = InfluxDBClient('localhost', 8086, 'root', 'root', 'rover')
+    influxDb = InfluxDBClient('127.0.0.1', 8086, 'root', 'root', 'rover')
     while True:
         print 'state of client activation ' + str(r.get('activated'))
         if r.get('activated') == 'False':
+            print 'ACTIVATED_FALSE_IN_LOOP'
             json_body = [
                 {
                     "measurement": "access_code",
@@ -141,15 +174,16 @@ def background_thread():
                         "user_name": "No Active User",
                         "access_code": r.get('access_code'),
                         "battery_level": 80,
-                        "client": "http://127.0.0.1:5000"
+                        "client": client_url
                     }
                 }
             ]
-            client.write_points(json_body)
+            print json_body
+            influxDb.write_points(json_body)
             print 'NotActivated - sleep 2'
             time.sleep(2)
         elif r.get('activated') == 'True':
-
+            print 'ACTIVATED_TRUE_IN_LOOP'
             json_body = [
                 {
                     "measurement": "access_code",
@@ -164,16 +198,18 @@ def background_thread():
                         "user_name": db.get('ctrl_user'),
                         "access_code": "XXXX",
                         "battery_level": 80,
-                        "client": "http://127.0.0.1:5000",
+                        "client": client_url,
                         "signup": int(r.get('signup'))
                     }
                 }
             ]
-            client.write_points(json_body)
+            print json_body
+            influxDb.write_points(json_body)
             socketio.emit('newnumber', {'number': 'Rover Connected', 'countdown' : str(r.pttl('activated')/1000), 'user' : db.get('ctrl_user')}, namespace='/test')
             print 'Activated - Connected - sleep 2'
             time.sleep(1)
         elif r.get('activated') == None:
+            print 'ACTIVATED_NONE_IN_LOOP'
             r.set('access_code', random.randint(1111,9999))
             print 'Expired - Emit - sleep 2'
             socketio.emit('newnumber', {'number': r.get('access_code')}, namespace='/test')
@@ -186,16 +222,17 @@ def background_thread():
                     },
                     "time": 1234567890000000,
                     "fields": {
-                        "countdown": "IDLE",
-                        "rover_state": "IDLE",
+                        "countdown": "IDLE-1",
+                        "rover_state": "IDLE-1",
                         "user_name": "No Active User",
                         "access_code": r.get('access_code'),
                         "battery_level": 80,
-                        "client": "http://127.0.0.1:5000"
+                        "client": client_url
                     }
                 }
             ]
-            client.write_points(json_body)
+            print json_body
+            influxDb.write_points(json_body)
             r.set('activated', 'False')
             time.sleep(2)
         else:
@@ -237,6 +274,7 @@ def rover():
 @app.route('/', methods=['GET', 'POST'])
 def login():
     error = None
+    print request.args
     if current_user.is_authenticated:
         return redirect(url_for('joystick'))
     if request.method == 'POST':
@@ -276,7 +314,47 @@ def login():
                 return redirect(url_for('joystick'))
             else:
                 error = 'Invalid Access Code!'
-    return render_template('login.html', error=error)
+
+    if request.method == 'GET' and request.args.get('username') != None and request.args.get('password') != None:
+        username = request.args.get('username')
+        password = request.args.get('password')
+        print 'form username ' + username
+        print 'form password ' + password
+        if username != 'admin':
+            users_repository.create_user(username, db.get('access_code'))
+            print db.get('access_code')
+        registeredUser = users_repository.get_user(username)
+        if registeredUser != None and registeredUser.username == 'admin':
+            if registeredUser != None and registeredUser.password == password:
+                print 'Users '+ str(users_repository.users) 
+                print 'Register user %s , password %s' % (registeredUser.username, registeredUser.password) 
+                print('Admin Logged in..')
+                login_user(registeredUser)
+                return redirect(url_for('admin'))
+            else:
+                error = 'Invalid admin password'
+        else:
+            # session.permanent = True
+            # app.permanent_session_lifetime = timedelta(minutes=session_timeout)
+            print 'form username ' + username
+            print 'form password ' + password
+            if registeredUser != None and registeredUser.password == password :
+                print 'Users '+ str(users_repository.users) 
+                print 'Register user %s , password %s' % (registeredUser.username, registeredUser.password)
+                print('Controller Logged in..')
+                login_user(registeredUser)
+                db.set('ctrl_user', username)
+                db.set('access_code', 'Rover Activated')
+                db.set('activated', 'True', ex=key_validity)
+                client.connect("localhost", 1883, 60)
+                print 'SET ROVER STATE TO ACTIVE'
+                new_user_count = int(db.get('signup')) + 1
+                db.set('signup', new_user_count)
+                socketio.emit('newnumber', {'number': db.get('access_code')}, namespace='/test')
+                return redirect(url_for('joystick'))
+            else:
+                error = 'Invalid Access Code!'
+    return render_template('loginV2.html', error=error)
 
 # callback to reload the user object        
 @login_manager.user_loader
@@ -300,9 +378,10 @@ def page_not_found(e):
 
 @socketio.on('my_event', namespace='/test')
 def test_message(message):
-    print message['data']
+    print message['data'] + ' MQTT'
     session['receive_count'] = session.get('receive_count', 0) + 1
-    client.publish('/test/dinesh/kumar', payload=str(message), qos=0, retain=False)
+    x = client.publish('topic/direction', payload=str(message), qos=0, retain=False)
+    print x 
     socketio.emit('my_response', {'data': message['data']} , namespace='/test')
     #emit('my_response', {'data': message['data'], 'count': session['receive_count']})
 
@@ -385,4 +464,4 @@ def test_disconnect():
 
 
 if __name__ == '__main__':
-    socketio.run(app, debug=False)
+    socketio.run(app, debug=True, host=host_name)

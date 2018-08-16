@@ -319,7 +319,10 @@ var JoyStick = (function(container, parameters) {
 		}
 		if(pressed==1)
 		{
-		    socket.emit('my_event', {data: result});
+			if(result != "C")
+			{
+		        socket.emit('my_event', {data: result});
+		    }
 	    }
 		return result;
 	};
